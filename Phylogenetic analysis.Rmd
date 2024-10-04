@@ -1,0 +1,235 @@
+---
+title: "Phylogenetic Least Squares analysis"
+author: "O. Johnson"
+date: "2024-09-29"
+output: html_document
+---
+
+# About this script
+
+The following document provides the R code for the analysis for the paper: Johnson *et al.* 
+
+**\*Corresponding author:**
+[olivia.johsnon\@utas.edu.au](mailto:olivia.johsnon@utas.edu.au){.email}
+
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **R-version**          | 4.4.1 (2024-06-14 ucrt) -- "Race for Your Life"                                                        |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **platform**           | x86_64-w64-mingw32/x64                                                                                   |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Article DOI**        |                                                                                                       |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Article link**       |                                                                                                       |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Article citation**   | Johnson *et al.*  |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Time series**        | 1992 - 2024                                                                                          |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Geographical scale** | Continental Australia                                                                                 |
++------------------------+-------------------------------------------------------------------------------------------------------+
+| **Code author contact**| olivia.johnson@utas.edu.au                                                                            |
++------------------------+-------------------------------------------------------------------------------------------------------+
+
+# Set-up
+
+```{r knitr-options}
+#| include = FALSE
+
+library(knitr)
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+# save csv files for each step?
+save_csv <- TRUE
+
+```
+
+# Loading packages
+Load in all required packages for this analysis
+```{r packages}
+library(knitr)
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(dplyr)
+library(data.table)
+library(caper)
+library(ape)
+library(fishtree)
+library(readr)
+library(rotl)
+library(taxize)
+library(phytools)
+library(ggtree)
+library(httr)
+library(jsonlite)
+library(ape)           
+library(ggtree)        
+library(dplyr)         
+library(ggplot2)
+
+# "not in" function
+`%!in%` <- Negate(`%in%`)
+```
+
+#Read in data
+```{r - data input}
+
+species <- read_csv("LMM_output.csv")
+
+covariates <- read_csv("covariates_final.csv") %>%
+  rename(site_code = "Name")
+
+lats_and_longs <- read_csv("all_lats_longs_clean.csv")
+
+```
+
+```{r - Phyolgeny of species}
+
+###################################
+# Fetch OTT IDs for species
+
+# Extract species names and match with Open Tree of Life
+resolved_names <- species %>%
+  pull(species_name) %>%
+  tnrs_match_names()
+
+# Check the result
+print(resolved_names)
+
+# Filter only the matched species
+matched_species <- resolved_names %>%
+  filter(is.na(approximate_match) | approximate_match == FALSE)
+
+# If you want to keep only successfully matched species (those with a valid ott_id)
+matched_species_clean <- matched_species %>%
+  filter(!is.na(ott_id))
+
+# Check the cleaned matched species
+print(matched_species_clean)
+
+# First, rename the column correctly using rename() function
+matched_species_clean <- matched_species_clean %>%
+  rename(species_name = search_string) %>%  
+  mutate(species_name = str_replace(species_name, "^(\\w)", toupper))
+
+#Separate out taxa groups for plotting
+
+#This data frame has been exported - read in and begin as below
+
+#take relevant columns, same from the species data frame and left join
+ott_ids <- read_csv("ott_id.csv") %>%
+  mutate(
+    species_name = str_replace(species_name, "^(\\w)", toupper),
+    ott_id = as.numeric(ott_id))                                    
+  
+phylo <- left_join(ott_ids, species, by = "species_name")
+
+#Algae
+algae <- phylo %>%
+  filter(taxon == "Macroalgae")
+
+#Fish
+fish <- phylo %>%
+  filter(taxon == "Vertebrate")
+
+#Inverts
+inverts <- phylo %>%
+  filter(taxon == "Invertebrate")
+
+
+
+####### FISH ###########
+#Let's improve this plot - Fishtree phylogeny is for rayed fish only: 
+#Separate Actinopterygii out
+
+# Split into two datasets
+actinopterygii_fish <- fish %>% filter(class == "Actinopterygii")
+
+# You can further split by slope category (declining vs. increasing)
+# For Actinopterygii:
+actin_declining <- actinopterygii_fish %>% filter(slope_category == "declining")
+actin_increasing <- actinopterygii_fish %>% filter(slope_category == "increasing")
+
+# Now retrieve the phylogenetic trees for each group
+# Assume 'species_list' contains species names
+phylo_actin <- fishtree_phylogeny(actinopterygii_fish$species_name)
+
+#Only 303 of the 437 fish requested have been found
+
+# Plot each phylogenetic tree with customization
+# Function to enhance plotting of phylogenetic trees
+plot_phylo_tree <- function(phylo_tree, title, species_data) {
+  ggtree(phylo_tree, layout = "rectangular") +
+    geom_tiplab(size = 2, align = TRUE, linetype = 'dashed') +  # Automatically uses tip labels
+    geom_tippoint(aes(color = species_data$slope_category[match(phylo_tree$tip.label, species_data$species_name)]), size = 2) +  # Color by slope_category  
+    theme_tree2() + 
+    labs(title = title) +
+    scale_color_manual(values = c("declining" = "red", "increasing" = "blue")) +
+    theme(legend.position = "right", text = element_text(size = 12))  # Customize text and legend
+}
+
+# Plot Actinopterygii declining and increasing species separately
+plot_actin_declining <- plot_phylo_tree(fishtree_phylogeny(actin_declining$species_name), "Actinopterygii (Declining)", actin_declining)
+plot_actin_increasing <- plot_phylo_tree(fishtree_phylogeny(actin_increasing$species_name), "Actinopterygii (Increasing)", actin_increasing)
+
+# Visualize the plots (optional) to check the output
+plot_actin_declining
+plot_actin_increasing
+
+# Function to enhance plotting of phylogenetic trees
+plot_phylo_tree <- function(phylo_tree, title, species_data) {
+  # Check if phylo_tree is a valid tree object
+  if (!inherits(phylo_tree, "phylo")) {
+    stop("The provided phylo_tree is not a valid phylogenetic tree object.")
+  }
+
+  # Create the plot
+  ggtree(phylo_tree, layout = "rectangular") +
+    geom_tiplab(aes(label = .data$tip.label), size = 2, align = TRUE, linetype = 'dashed') +  # Use .data for better compatibility
+    geom_tippoint(aes(color = species_data$slope_category), size = 2) +  # Color by slope_category
+    theme_tree2() + 
+    labs(title = title) +
+    scale_color_manual(values = c("declining" = "red", "increasing" = "blue")) +
+    theme(legend.position = "right", text = element_text(size = 12))  # Customize text and legend
+}
+
+# Plot Actinopterygii increasing species
+plot_actin_increasing <- plot_phylo_tree(fishtree_phylogeny(actin_increasing$species_name), "Actinopterygii (Increasing)", actin_increasing)
+
+
+
+################## Phylogenetic Least Squares analysis #######################
+pgls_data <- phylo %>%
+  filter(species_name %in% phylo) %>%
+  left_join(covariates, by = site_code)  
+
+# Convert your data into comparative data object (required for PGLS)
+comp_data <- comparative.data(phy = phylo_tree, 
+                              data = pgls_data, 
+                              names.col = ("site_code"), 
+                              vcv = TRUE, 
+                              na.omit = FALSE)
+
+# Check the comparative data object
+print(comp_data)
+
+# Perform PGLS analysis
+# First attempt - slope as the response variable, body size and temperature as predictors
+pgls_model <- pgls(slope ~ max_length + temperature, data = comp_data)
+
+# Check the summary of the PGLS model
+summary(pgls_model)
+
+# If you want to visualize model diagnostics, you can plot residuals
+par(mfrow = c(2, 2))
+plot(pgls_model)
+
+# Extract coefficients and p-values
+coef(pgls_model)
+summary(pgls_model)$coefficients
+
+```
